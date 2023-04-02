@@ -24,3 +24,6 @@ Step 2. 代码开启
 
 ## 兼容性
 Android 5.0 ~ Android 12
+
+### QueueWork 源码位置
+* [QueueWork](https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/app/QueuedWork.java;drc=f48f92386e7216eed0de8a23faa35f0071affb05;bpv=0;bpt=1;l=185)
