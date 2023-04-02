@@ -6,11 +6,12 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * created by Knight-ZXW on 2021/9/14
+ * android 8.0以下版本使用的是 ConcurrentLinkedQueue
  */
 public class ProxyFinishersLinkedList<T> extends ConcurrentLinkedQueue<T> {
 
     private final ConcurrentLinkedQueue<T> sPendingWorkFinishers;
-    public ProxyFinishersLinkedList(ConcurrentLinkedQueue<T> sPendingWorkFinishers){
+    public  ProxyFinishersLinkedList(ConcurrentLinkedQueue<T> sPendingWorkFinishers){
         this.sPendingWorkFinishers = sPendingWorkFinishers;
     }
 

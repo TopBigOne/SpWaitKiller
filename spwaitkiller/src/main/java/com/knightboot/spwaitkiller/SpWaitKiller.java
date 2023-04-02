@@ -17,37 +17,39 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * created by Knight-ZXW on 2021/9/14
  */
 public class SpWaitKiller {
+    private static final String TAG = "SpWaitKiller:";
+
 
     private HiddenApiExempter hiddenApiExempter;
 
     private boolean working;
 
-    private final boolean neverWaitingFinishQueue;
-    private final boolean neverProcessWorkOnMainThread;
+    private final boolean isNeverWaitingFinishQueue;
+    private final boolean isNeverProcessWorkOnMainThread;
 
     private final UnExpectExceptionCatcher unExpectExceptionCatcher;
-    private int targetSdkVersion =0;
-    private Context mContext;
+    private       int                      targetSdkVersion = 0;
+    private       Context                  mContext;
 
     private SpWaitKiller(SpWaitKiller.Builder builder) {
+        // 使用隐藏API： Landroid/app/QueuedWork
         if (builder.hiddenApiExempter == null) {
             builder.hiddenApiExempter = new DefaultHiddenApiExempter();
         }
-        if (builder.unExpectExceptionCatcher ==null){
+        if (builder.unExpectExceptionCatcher == null) {
             builder.unExpectExceptionCatcher = new UnExpectExceptionCatcher() {
                 @Override
                 public void onException(Throwable ex) {
-                    Log.e("SpWaitKillerException","catch Exception \n"
-                            +Log.getStackTraceString(ex));
+                    Log.e("SpWaitKillerException", "catch Exception \n" + Log.getStackTraceString(ex));
                 }
             };
         }
         this.hiddenApiExempter = builder.hiddenApiExempter;
-        this.neverProcessWorkOnMainThread = builder.neverProcessWorkOnMainThread;
-        this.neverWaitingFinishQueue = builder.neverWaitingFinishQueue;
+        this.isNeverProcessWorkOnMainThread = builder.neverProcessWorkOnMainThread;
+        this.isNeverWaitingFinishQueue = builder.neverWaitingFinishQueue;
         this.mContext = builder.context;
-        this.unExpectExceptionCatcher =builder.unExpectExceptionCatcher;
-        this.targetSdkVersion =  this.mContext.getApplicationInfo().targetSdkVersion;
+        this.unExpectExceptionCatcher = builder.unExpectExceptionCatcher;
+        this.targetSdkVersion = this.mContext.getApplicationInfo().targetSdkVersion;
 
 
     }
@@ -57,7 +59,11 @@ public class SpWaitKiller {
     }
 
 
-    public void work() {
+    /**
+     * inner: invoke realWork()
+     */
+    public void startWork() {
+        Log.d(TAG, "startWork: ");
         try {
             if (working) {
                 return;
@@ -70,30 +76,40 @@ public class SpWaitKiller {
     }
 
     private void realWork() throws Exception {
+        Log.d(TAG, "realWork: ");
         Class QueuedWorkClass = Class.forName("android.app.QueuedWork");
 
-        if (neverWaitingFinishQueue) {
+        if (isNeverWaitingFinishQueue) {
+            // android 小于26
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                 Field sPendingWorkFinishersField = QueuedWorkClass.getDeclaredField("sPendingWorkFinishers");
                 sPendingWorkFinishersField.setAccessible(true);
 
+                // 并发
                 ConcurrentLinkedQueue sPendingWorkFinishers = (ConcurrentLinkedQueue) sPendingWorkFinishersField.get(null);
+                // 使用我们自己的 变量
                 ProxyFinishersLinkedList proxyedSFinishers = new ProxyFinishersLinkedList(sPendingWorkFinishers);
                 sPendingWorkFinishersField.set(null, proxyedSFinishers);
-            } else{
+
+            } else {
+                // private static final LinkedList<Runnable> sFinishers = new LinkedList<>();
                 Field sFinishersField = QueuedWorkClass.getDeclaredField("sFinishers");
                 sFinishersField.setAccessible(true);
+                // the OS` sFinisher
                 LinkedList sFinishers = (LinkedList) sFinishersField.get(null);
+                // 将系统的 sFinisher ，主要是里面包含了需要执行的Task，
                 ProxyFinishersList proxyedSFinishers = new ProxyFinishersList(sFinishers);
                 sFinishersField.set(null, proxyedSFinishers);
             }
         }
 
-        if (neverProcessWorkOnMainThread) {
+        if (isNeverProcessWorkOnMainThread) {
             // 通过调用 getHandler函数
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                return;
+            }
 
-            if (targetSdkVersion>=Build.VERSION_CODES.R){
+            if (targetSdkVersion >= Build.VERSION_CODES.R) {
                 this.hiddenApiExempter.exempt(mContext);
             }
             QueueWorksWorkFieldHooker queueWorksWorkFieldHooker = new QueueWorksWorkFieldHooker();
@@ -103,26 +119,29 @@ public class SpWaitKiller {
 
     private static class QueueWorksWorkFieldHooker implements ProxySWork.AboveAndroid12Processor {
 
-        private boolean reflectionFailed =false;
+        private boolean reflectionFailed = false;
         /**
          * sLock对象， 操作
          */
-        private Object sLock = null;
-        private  Field sWorkField;
-        private Looper looper;
+        private Object  sLock            = null;
+        private Field   sWorkField;
+        private Looper  mLooper;
 
         @SuppressLint("SoonBlockedPrivateApi")
-        public QueueWorksWorkFieldHooker(){
+        public QueueWorksWorkFieldHooker() {
             try {
-                Class QueuedWorkClass = Class.forName("android.app.QueuedWork");
-                Method method = QueuedWorkClass.getDeclaredMethod("getHandler");
+
+                // 获取 QueuedWork 的 handle 和 looper；
+                Class  QueuedWorkClass = Class.forName("android.app.QueuedWork");
+                Method method          = QueuedWorkClass.getDeclaredMethod("getHandler");
                 method.setAccessible(true);
-
                 Handler handler = (android.os.Handler) method.invoke(null);
-                looper = handler.getLooper();
+                mLooper = handler.getLooper();
 
+                // 源码：private static LinkedList<Runnable> sWork = new LinkedList<>();
                 sWorkField = QueuedWorkClass.getDeclaredField("sWork");
                 sWorkField.setAccessible(true);
+                // private static final Object sLock = new Object();
                 Field sLockField = QueuedWorkClass.getDeclaredField("sLock");
                 sLockField.setAccessible(true);
                 sLock = sLockField.get(null);
@@ -132,22 +151,6 @@ public class SpWaitKiller {
 
         }
 
-        private void proxyWork(){
-            if (reflectionFailed){
-                return;
-            }
-            synchronized (sLock){
-                //Android12以下，sWork自始至终是同一个对象
-                try {
-                    LinkedList sWork = (LinkedList) sWorkField.get(null);
-                    ProxySWork sWorkProxy = new ProxySWork(sWork, looper, this);
-                    sWorkField.set(null, sWorkProxy);
-                } catch (IllegalAccessException e) {
-                    reflectionFailed =true;
-                }
-            }
-        }
-
 
         @Override
         public void reProxySWork() {
@@ -155,11 +158,28 @@ public class SpWaitKiller {
             //因此需要重新代理
             proxyWork();
         }
+
+        private void proxyWork() {
+            if (reflectionFailed) {
+                return;
+            }
+            synchronized (sLock) {
+                //Android12以下，sWork自始至终是同一个对象
+                try {
+                    // 原本要执行的 Runnable 集合
+                    LinkedList<Runnable> sWork      = (LinkedList) sWorkField.get(null);
+                    ProxySWork           sWorkProxy = new ProxySWork(sWork, mLooper, this);
+                    sWorkField.set(null, sWorkProxy);
+                } catch (IllegalAccessException e) {
+                    reflectionFailed = true;
+                }
+            }
+        }
     }
 
     public static class Builder {
-        private boolean neverWaitingFinishQueue;
-        private boolean neverProcessWorkOnMainThread;
+        private boolean                  neverWaitingFinishQueue;
+        private boolean                  neverProcessWorkOnMainThread;
         private UnExpectExceptionCatcher unExpectExceptionCatcher;
 
 
@@ -169,7 +189,7 @@ public class SpWaitKiller {
             this.neverProcessWorkOnMainThread = true;
         }
 
-        Context context;
+        Context           context;
         HiddenApiExempter hiddenApiExempter;
 
         public Builder hiddenApiExempter(HiddenApiExempter hiddenApiExempter) {
@@ -182,8 +202,8 @@ public class SpWaitKiller {
             return this;
         }
 
-        public Builder unExpectExceptionCatcher(UnExpectExceptionCatcher unExpectExceptionCatcher){
-            this.unExpectExceptionCatcher =unExpectExceptionCatcher;
+        public Builder unExpectExceptionCatcher(UnExpectExceptionCatcher unExpectExceptionCatcher) {
+            this.unExpectExceptionCatcher = unExpectExceptionCatcher;
             return this;
         }
 
